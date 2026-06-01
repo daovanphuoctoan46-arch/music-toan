@@ -56,7 +56,6 @@ class App {
     this.currentLyricIndex = -1;
     this.lrcLines = [];
     this.audio = new Audio();
-    this.audio.crossOrigin = 'anonymous';
     this.currentTrackData = null;
 
     this.initCore();
@@ -213,35 +212,32 @@ class App {
       }
 
       const TOP = Math.min(ytItems.length, 5);
-      const ytWithDur = await Promise.all(
-        ytItems.slice(0, TOP).map(async item => {
-          try {
-            const mp3 = await this.fetchMP3Data(item.id);
-            if (!mp3?.mp3) return { item, mp3: null, dur: null };
-            const dur = await this.probeAudioDuration(mp3.mp3);
-            return { item, mp3, dur };
-          } catch { return { item, mp3: null, dur: null }; }
-        })
-      );
 
+      // Dùng item.duration từ YouTube search (đã có sẵn, không cần probe)
+      // Probe gọi /api/stream 5 lần → URL YouTube bị "tiêu" trước khi phát thật
       let bestMatch = null, bestScore = -Infinity;
-      for (const entry of ytWithDur) {
-        if (!entry.mp3) continue;
-        const lrc = this.pickBestLRC(lrcCandidates, entry.item.title, entry.item.artist, entry.dur);
-        const txtScore = strScore(q, entry.item.title) + strScore(q, entry.item.artist) * 0.3;
+      for (const item of ytItems.slice(0, TOP)) {
+        const dur = item.duration || null;
+        const lrc = this.pickBestLRC(lrcCandidates, item.title, item.artist, dur);
+        const txtScore = strScore(q, item.title) + strScore(q, item.artist) * 0.3;
         let durScore = 0;
-        if (entry.dur && lrc?.duration) {
-          const diff = Math.abs(entry.dur - lrc.duration);
+        if (dur && lrc?.duration) {
+          const diff = Math.abs(dur - lrc.duration);
           durScore = diff < 2 ? 1.0 : diff < 5 ? 0.7 : diff < 10 ? 0.4 : 0;
         }
         const total = txtScore + durScore * 1.5 + (lrc?.lrc ? 0.5 : 0);
         if (total > bestScore) {
           bestScore = total;
-          bestMatch = { ...entry, lrc };
+          bestMatch = { item, mp3: null, lrc, dur };
         }
       }
 
+      // Chỉ fetch mp3 cho 1 bài tốt nhất
       if (bestMatch) {
+        try {
+          const mp3 = await this.fetchMP3Data(bestMatch.item.id);
+          bestMatch.mp3 = mp3?.mp3 ? mp3 : null;
+        } catch (_) {}
         this.playTrack(bestMatch);
       } else if (lrcCandidates.length) {
         const bestLrc = this.pickBestLRC(lrcCandidates, q, '', null);
