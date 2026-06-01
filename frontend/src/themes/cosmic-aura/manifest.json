@@ -1,0 +1,9 @@
+{
+  "id": "cosmic-aura",
+  "name": "Cosmic Aura",
+  "description": "Particles, aura glow, frequency visualizer in circular layout",
+  "author": "dev",
+  "version": "1.0.0",
+  "preview": "./preview.jpg",
+  "tags": ["dark", "particles", "glow", "circular"]
+}

@@ -1,0 +1,9 @@
+{
+  "id": "template",
+  "name": "Template Theme",
+  "description": "Boilerplate for creating new themes",
+  "author": "Developer",
+  "version": "1.0.0",
+  "preview": "./preview.jpg",
+  "tags": ["template", "boilerplate"]
+}

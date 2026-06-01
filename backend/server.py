@@ -1,0 +1,209 @@
+#!/usr/bin/env python3
+"""
+Cosmic Aura Backend — YouTube Engine (Production Ready)
+"""
+
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import urllib.request
+import json, ssl, time, threading, os, mimetypes
+
+# Lấy PORT từ môi trường (Render/Heroku cấp phát), mặc định 8765
+PORT = int(os.environ.get("PORT", 8765))
+
+# Cache stream URL
+_cache = {}
+_cache_lock = threading.Lock()
+CACHE_TTL = 4 * 3600
+
+try:
+    import yt_dlp
+    YT_OK = True
+except ImportError:
+    YT_OK = False
+    print("[!] yt-dlp not found! Run: pip install yt-dlp")
+
+# ── Utils ─────────────────────────────────────────────────────────────────────
+
+import re as _re
+
+def safe_print(msg):
+    try: print(msg)
+    except: pass
+
+def parse_yt_title(raw_title, uploader=""):
+    suffixes = [
+        r"\(official\s*(music\s*)?video\)", r"\(official\s*mv\)",
+        r"\(official\s*audio\)", r"\(lyrics?\s*(video)?\)",
+        r"\(lyric\s*video\)", r"\(audio\)", r"\(official\)",
+        r"\[official.*?\]", r"\(mv\)", r"\(full.*?\)",
+        r"\|\s*official.*", r"//\s*official.*",
+        r"\(\d{4}\)", r"\(ft\..*?\)", r"\(feat\..*?\)",
+    ]
+    title = raw_title
+    for s in suffixes:
+        title = _re.sub(s, "", title, flags=_re.IGNORECASE).strip()
+    title = _re.sub(r"\s*\|\s*$", "", title).strip()
+
+    artist = ""
+    if " - " in title or " \u2013 " in title:
+        sep = " - " if " - " in title else " \u2013 "
+        parts = title.split(sep, 1)
+        if len(parts[0]) < len(parts[1]) + 20:
+            artist = parts[0].strip()
+            title  = parts[1].strip()
+    if not artist and uploader and uploader.lower() not in ("youtube", "topic", "vevo", "auto-generated"):
+        artist = _re.sub(r"\s*-\s*(topic|official|vevo).*$", "", uploader, flags=_re.IGNORECASE).strip()
+
+    title  = _re.sub(r"\s+", " ", title).strip(" -\u2013|/")
+    artist = _re.sub(r"\s+", " ", artist).strip(" -\u2013|/")
+    return title, artist
+
+def search_youtube(q):
+    if not YT_OK: return []
+    safe_print(f"[Search] {q}")
+    opts = {"quiet": True, "no_warnings": True, "extract_flat": True, "default_search": "ytsearch12"}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"ytsearch12:{q}", download=False)
+        results = []
+        for e in info.get("entries", []):
+            if not e or not e.get("id"): continue
+            dur = int(e.get("duration") or 0)
+            if dur > 600: continue
+            raw_title = e.get("title", "")
+            uploader  = e.get("uploader", "")
+            clean_title, clean_artist = parse_yt_title(raw_title, uploader)
+            results.append({
+                "id": f"yt:{e['id']}",
+                "title": clean_title or raw_title,
+                "artist": clean_artist or uploader,
+                "thumbnail": e.get("thumbnail") or f"https://i.ytimg.com/vi/{e['id']}/mqdefault.jpg",
+                "duration": dur,
+                "source": "youtube",
+                "hasSyncedLyrics": False,
+            })
+        return results
+    except: return []
+
+def get_stream_url(video_id):
+    with _cache_lock:
+        if video_id in _cache:
+            url, exp = _cache[video_id]
+            if time.time() < exp: return url
+    if not YT_OK: return ""
+    opts = {"quiet": True, "no_warnings": True, "format": "bestaudio[ext=webm]/bestaudio[ext=m4a]/bestaudio/best"}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
+        url = info.get("url", "")
+        if url:
+            with _cache_lock:
+                _cache[video_id] = (url, time.time() + CACHE_TTL)
+        return url
+    except: return ""
+
+# ── HTTP Handler ───────────────────────────────────────────────────────────────
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_): pass
+
+    def send_json(self, obj):
+        body = json.dumps(obj, ensure_ascii=False).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        path   = parsed.path
+        kv     = {k: v[0] for k, v in parse_qs(parsed.query).items()}
+
+        # ── API Routes ────────────────────────────────────────────────────────
+        if path == "/api/search":
+            q = kv.get("q", "").strip()
+            self.send_json({"results": search_youtube(q + " lyrics audio")})
+            return
+
+        if path == "/api/mp3":
+            song_id = kv.get("id", ""); query = kv.get("q", ""); video_id = thumb = ""
+            if song_id.startswith("yt:"): video_id = song_id[3:]
+            elif query:
+                res = search_youtube(query + " audio")
+                if res: video_id = res[0]["id"][3:]; thumb = res[0]["thumbnail"]
+            if video_id:
+                url = get_stream_url(video_id)
+                if url:
+                    self.send_json({"mp3": f"/api/stream?id={video_id}", "thumbnail": thumb or f"https://i.ytimg.com/vi/{video_id}/mqdefault.jpg"})
+                    return
+            self.send_json({"mp3": "", "thumbnail": "", "error": "Lỗi lấy link"})
+            return
+
+        if path == "/api/stream":
+            video_id = kv.get("id", "")
+            if not video_id: self.send_error(400); return
+            stream_url = get_stream_url(video_id)
+            if not stream_url: self.send_error(404); return
+            try:
+                hdrs = {"User-Agent": "Mozilla/5.0", "Referer": "https://www.youtube.com/"}
+                if rng := self.headers.get("Range"): hdrs["Range"] = rng
+                ctx = ssl.create_default_context()
+                ctx.check_hostname = False; ctx.verify_mode = ssl.CERT_NONE
+                req = urllib.request.Request(stream_url, headers=hdrs)
+                with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
+                    self.send_response(resp.status)
+                    self.send_header("Content-Type", resp.headers.get("Content-Type", "audio/webm"))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.send_header("Accept-Ranges", "bytes")
+                    if cl := resp.headers.get("Content-Length"): self.send_header("Content-Length", cl)
+                    if cr := resp.headers.get("Content-Range"): self.send_header("Content-Range", cr)
+                    self.end_headers()
+                    while chunk := resp.read(65536): self.wfile.write(chunk)
+            except: pass
+            return
+
+        if path == "/api/status":
+            self.send_json({"ok": True, "backend": "youtube", "yt_dlp": YT_OK})
+            return
+
+        # ── Static Files (Dành cho Production) ────────────────────────────────
+        # Phục vụ file từ frontend/dist nếu tồn tại
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        dist_dir = os.path.join(os.path.dirname(base_dir), "frontend", "dist")
+        
+        target_path = path[1:] if path.startswith("/") else path
+        if not target_path or target_path == "index.html":
+            target_path = "index.html"
+            
+        file_to_serve = os.path.join(dist_dir, target_path)
+        
+        if os.path.exists(file_to_serve) and os.path.isfile(file_to_serve):
+            mime_type, _ = mimetypes.guess_type(file_to_serve)
+            self.send_response(200)
+            self.send_header("Content-Type", mime_type or "application/octet-stream")
+            self.end_headers()
+            with open(file_to_serve, "rb") as f:
+                self.wfile.write(f.read())
+            return
+
+        # Fallback cho SPA (Trình duyệt load trực tiếp các route lạ)
+        index_file = os.path.join(dist_dir, "index.html")
+        if os.path.exists(index_file):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.end_headers()
+            with open(index_file, "rb") as f:
+                self.wfile.write(f.read())
+            return
+
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write("Cosmic Aura Backend is running. Frontend not found.".encode())
+
+# ── Main ───────────────────────────────────────────────────────────────────────
+if __name__ == "__main__":
+    safe_print(f"Server: http://0.0.0.0:{PORT}")
+    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
