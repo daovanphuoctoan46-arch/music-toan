@@ -163,13 +163,28 @@ class Handler(BaseHTTPRequestHandler):
                 req = urllib.request.Request(stream_url, headers=hdrs)
                 with urllib.request.urlopen(req, context=ctx, timeout=15) as resp:
                     self.send_response(resp.status)
-                    self.send_header("Content-Type", resp.headers.get("Content-Type", "audio/webm"))
+                    
+                    # Xác định Content-Type chuẩn hơn
+                    ct = resp.headers.get("Content-Type")
+                    if not ct or "text/plain" in ct:
+                        ct = "audio/webm" # YouTube thường dùng webm/opus
+                    
+                    self.send_header("Content-Type", ct)
                     self.send_header("Access-Control-Allow-Origin", "*")
                     self.send_header("Accept-Ranges", "bytes")
-                    if cl := resp.headers.get("Content-Length"): self.send_header("Content-Length", cl)
-                    if cr := resp.headers.get("Content-Range"): self.send_header("Content-Range", cr)
+                    
+                    if cl := resp.headers.get("Content-Length"):
+                        self.send_header("Content-Length", cl)
+                    if cr := resp.headers.get("Content-Range"):
+                        self.send_header("Content-Range", cr)
+                    
                     self.end_headers()
-                    while chunk := resp.read(65536): self.wfile.write(chunk)
+                    
+                    try:
+                        while chunk := resp.read(128 * 1024): # Đọc chunk lớn hơn (128KB)
+                            self.wfile.write(chunk)
+                    except (ConnectionResetError, BrokenPipeError):
+                        pass
             except Exception as ex:
                 safe_print(f"[Stream proxy error] {ex}")
             return
