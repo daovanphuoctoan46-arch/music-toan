@@ -21,15 +21,17 @@ try:
     YT_OK = True
 except ImportError:
     YT_OK = False
-    print("[!] yt-dlp not found! Run: pip install yt-dlp")
+    print("[!] yt-dlp not found! Run: pip install yt-dlp", flush=True)
 
 # ── Utils ─────────────────────────────────────────────────────────────────────
 
 import re as _re
 
 def safe_print(msg):
-    try: print(msg)
-    except: pass
+    try:
+        print(msg, flush=True)
+    except:
+        pass
 
 def parse_yt_title(raw_title, uploader=""):
     suffixes = [
@@ -84,7 +86,9 @@ def search_youtube(q):
                 "hasSyncedLyrics": False,
             })
         return results
-    except: return []
+    except Exception as ex:
+        safe_print(f"[Search error] {ex}")
+        return []
 
 def get_stream_url(video_id):
     with _cache_lock:
@@ -101,12 +105,17 @@ def get_stream_url(video_id):
             with _cache_lock:
                 _cache[video_id] = (url, time.time() + CACHE_TTL)
         return url
-    except: return ""
+    except Exception as ex:
+        safe_print(f"[Stream URL error] {ex}")
+        return ""
 
 # ── HTTP Handler ───────────────────────────────────────────────────────────────
 
 class Handler(BaseHTTPRequestHandler):
-    def log_message(self, *_): pass
+    def log_message(self, format, *args):
+        # Tắt log mặc định để Render log sạch hơn, hoặc có thể mở lại nếu cần debug
+        # safe_print("%s - - [%s] %s" % (self.address_string(), self.log_date_time_string(), format%args))
+        pass
 
     def send_json(self, obj):
         body = json.dumps(obj, ensure_ascii=False).encode()
@@ -161,16 +170,17 @@ class Handler(BaseHTTPRequestHandler):
                     if cr := resp.headers.get("Content-Range"): self.send_header("Content-Range", cr)
                     self.end_headers()
                     while chunk := resp.read(65536): self.wfile.write(chunk)
-            except: pass
+            except Exception as ex:
+                safe_print(f"[Stream proxy error] {ex}")
             return
 
-        if path == "/api/status":
+        if path == "/api/status" or path == "/health":
             self.send_json({"ok": True, "backend": "youtube", "yt_dlp": YT_OK})
             return
 
         # ── Static Files (Dành cho Production) ────────────────────────────────
-        # Phục vụ file từ frontend/dist nếu tồn tại
         base_dir = os.path.dirname(os.path.abspath(__file__))
+        # Giả sử cấu trúc: root/backend/server.py và root/frontend/dist/
         dist_dir = os.path.join(os.path.dirname(base_dir), "frontend", "dist")
         
         target_path = path[1:] if path.startswith("/") else path
@@ -181,6 +191,10 @@ class Handler(BaseHTTPRequestHandler):
         
         if os.path.exists(file_to_serve) and os.path.isfile(file_to_serve):
             mime_type, _ = mimetypes.guess_type(file_to_serve)
+            # Fix cho một số hệ thống thiếu mime-type cho .js/.css
+            if target_path.endswith(".js"): mime_type = "application/javascript"
+            if target_path.endswith(".css"): mime_type = "text/css"
+            
             self.send_response(200)
             self.send_header("Content-Type", mime_type or "application/octet-stream")
             self.end_headers()
@@ -198,12 +212,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.write(f.read())
             return
 
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
+        self.send_response(404)
         self.end_headers()
-        self.wfile.write("Cosmic Aura Backend is running. Frontend not found.".encode())
+        self.wfile.write("404 Not Found".encode())
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    safe_print(f"Server: http://0.0.0.0:{PORT}")
-    ThreadingHTTPServer(("0.0.0.0", PORT), Handler).serve_forever()
+    safe_print(f"--- Cosmic Aura Backend Starting ---")
+    safe_print(f"Port: {PORT}")
+    safe_print(f"Binding: 0.0.0.0")
+    try:
+        httpd = ThreadingHTTPServer(("0.0.0.0", PORT), Handler)
+        safe_print(f"Server is LIVE at http://0.0.0.0:{PORT}")
+        httpd.serve_forever()
+    except Exception as e:
+        safe_print(f"FATAL ERROR: {e}")
