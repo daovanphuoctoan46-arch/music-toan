@@ -263,9 +263,31 @@ class App {
     this.renderLyrics();
 
     this.audio.pause();
+    this.audio.removeAttribute('src');
+    this.audio.load();
+
+    console.log('[playTrack] mp3 object:', mp3);
+    console.log('[playTrack] mp3.mp3 value:', mp3?.mp3);
+
     if (mp3 && mp3.mp3) {
+      // Kiểm tra URL hợp lệ trước khi gán
+      if (!mp3.mp3.startsWith('/api/') && !mp3.mp3.startsWith('http') && !mp3.mp3.startsWith('blob:')) {
+        console.error('[playTrack] URL không hợp lệ:', mp3.mp3);
+        this.mainArtist.textContent = '⚠ Link nhạc không hợp lệ';
+        return;
+      }
+      console.log('[playTrack] Gán src:', mp3.mp3);
       this.audio.src = mp3.mp3;
-      this.audio.play().catch(() => {});
+      try {
+        await this.audio.play();
+      } catch(e) {
+        console.error('[playTrack] play() lỗi:', e.name, e.message);
+        // Thử lại 1 lần sau 500ms
+        setTimeout(async () => {
+          try { await this.audio.play(); }
+          catch(e2) { console.error('[playTrack] Retry thất bại:', e2.message); }
+        }, 500);
+      }
 
       playlistManager.addTrack({
         id: item.id,
@@ -278,7 +300,8 @@ class App {
       playlistManager.setCurrentIndexById(item.id);
       this.playlistUI.render();
     } else {
-      this.audio.src = "";
+      console.warn('[playTrack] Không có mp3, chỉ hiện lyrics');
+      this.audio.removeAttribute('src');
     }
   }
 
@@ -414,8 +437,13 @@ class App {
   }
 
   togglePlay() {
-    if (!this.audio.src) return;
-    this.audio.paused ? this.audio.play() : this.audio.pause();
+    const src = this.audio.getAttribute('src');
+    if (!src || src === '' || src === window.location.href) return;
+    if (this.audio.paused) {
+      this.audio.play().catch(e => console.warn('[togglePlay]', e.message));
+    } else {
+      this.audio.pause();
+    }
   }
 
   formatTime(s) {
