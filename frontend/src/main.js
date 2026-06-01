@@ -226,11 +226,13 @@ class App {
           durScore = diff < 2 ? 1.0 : diff < 5 ? 0.7 : diff < 10 ? 0.4 : 0;
         }
         const total = txtScore + durScore * 1.5 + (lrc?.lrc ? 0.5 : 0);
+        console.log(`[Score] "${item.title}" txt=${txtScore.toFixed(2)} dur=${durScore.toFixed(2)} total=${total.toFixed(2)} hasLrc=${!!lrc?.lrc}`);
         if (total > bestScore) {
           bestScore = total;
           bestMatch = { item, mp3: null, lrc, dur };
         }
       }
+      console.log('[doSearch] bestMatch:', bestMatch?.item?.title, 'score:', bestScore);
 
       // Chỉ fetch mp3 cho 1 bài tốt nhất
       if (bestMatch) {
