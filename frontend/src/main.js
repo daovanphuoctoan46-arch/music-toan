@@ -235,12 +235,15 @@ class App {
       console.log('[doSearch] bestMatch:', bestMatch?.item?.title, 'score:', bestScore);
 
       // Chỉ fetch mp3 cho 1 bài tốt nhất
-      if (bestMatch) {
+    if (bestMatch) {
         try {
           const mp3 = await this.fetchMP3Data(bestMatch.item.id);
+          console.log('[DEBUG] fetchMP3Data result:', JSON.stringify(mp3)); // THÊM DÒNG NÀY
           bestMatch.mp3 = mp3?.mp3 ? mp3 : null;
-        } catch (_) {}
-        this.playTrack(bestMatch);
+        } catch (e) {
+          console.error('[DEBUG] fetchMP3Data error:', e); // SỬA _ thành e
+        }
+      this.playTrack(bestMatch);
       } else if (lrcCandidates.length) {
         const bestLrc = this.pickBestLRC(lrcCandidates, q, '', null);
         this.playTrack({ item: { title: bestLrc.trackName || q, artist: '' }, mp3: null, lrc: bestLrc });
